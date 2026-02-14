@@ -16,12 +16,286 @@ class FFmpegConversionController {
     _cancelled = true;
     final session = _session;
     if (session != null) {
-      // Use FFmpegKit.cancel() with the session ID to abort.
       await FFmpegKit.cancel(session.getSessionId());
       _session = null;
     }
   }
 }
+
+/// Video information class
+class VideoInfo {
+  final int width;
+  final int height;
+  final double duration;
+  final String codec;
+  final double aspectRatio;
+  final double frameRate;
+  final String? audioCodec;
+
+  VideoInfo({
+    required this.width,
+    required this.height,
+    required this.duration,
+    required this.codec,
+    required this.aspectRatio,
+    required this.frameRate,
+    this.audioCodec,
+  });
+
+  @override
+  String toString() {
+    return 'VideoInfo(${width}x${height}, ${duration.toStringAsFixed(1)}s, $codec, ${aspectRatio.toStringAsFixed(2)}, ${frameRate.toStringAsFixed(1)}fps)';
+  }
+}
+
+/// Snapchat video requirements validation result
+class SnapchatValidationResult {
+  final bool isValid;
+  final List<String> issues;
+  final VideoInfo? videoInfo;
+
+  SnapchatValidationResult({
+    required this.isValid,
+    required this.issues,
+    this.videoInfo,
+  });
+}
+
+/// Gets detailed video information using FFprobe
+Future<VideoInfo?> getVideoInfo(String videoPath) async {
+  try {
+    final session = await FFprobeKit.getMediaInformation(videoPath);
+    final information = session.getMediaInformation();
+
+    if (information == null) {
+      print("⚠️  Could not get media information");
+      return null;
+    }
+
+    final properties = information.getAllProperties();
+    
+    // Get video stream info
+    final streams = properties?['streams'] as List?;
+    if (streams == null || streams.isEmpty) {
+      print("⚠️  No streams found");
+      return null;
+    }
+
+    // Find video stream
+    final videoStream = streams.firstWhere(
+      (stream) => stream['codec_type'] == 'video',
+      orElse: () => null,
+    );
+
+    if (videoStream == null) {
+      print("⚠️  No video stream found");
+      return null;
+    }
+
+    // Find audio stream
+    final audioStream = streams.firstWhere(
+      (stream) => stream['codec_type'] == 'audio',
+      orElse: () => null,
+    );
+
+    final width = videoStream['width'] ?? 0;
+    final height = videoStream['height'] ?? 0;
+    final codecName = videoStream['codec_name'] ?? 'unknown';
+    
+    // Parse duration
+    final durationString = information.getDuration();
+    final duration = double.tryParse(durationString ?? '0') ?? 0.0;
+
+    // Parse frame rate
+    final frameRateStr = videoStream['r_frame_rate'] ?? '30/1';
+    final frameRate = _parseFrameRate(frameRateStr);
+
+    final aspectRatio = width > 0 && height > 0 ? width / height : 0.0;
+    
+    final audioCodec = audioStream?['codec_name'];
+
+    return VideoInfo(
+      width: width,
+      height: height,
+      duration: duration,
+      codec: codecName,
+      aspectRatio: aspectRatio,
+      frameRate: frameRate,
+      audioCodec: audioCodec,
+    );
+  } catch (e) {
+    print("❌ Error getting video info: $e");
+    return null;
+  }
+}
+
+/// Parse frame rate string (e.g., "30/1" -> 30.0, "30000/1001" -> 29.97)
+double _parseFrameRate(String frameRateStr) {
+  try {
+    final parts = frameRateStr.split('/');
+    if (parts.length == 2) {
+      final numerator = double.parse(parts[0]);
+      final denominator = double.parse(parts[1]);
+      return numerator / denominator;
+    }
+    return double.tryParse(frameRateStr) ?? 30.0;
+  } catch (e) {
+    return 30.0;
+  }
+}
+
+/// Validates if video meets Snapchat Ads requirements
+/// 
+/// Snapchat Ads Video Requirements:
+/// - Codec: H.264
+/// - Resolution: Min 720x1280, Recommended 1080x1920 (9:16 aspect ratio)
+/// - Duration: 3-180 seconds
+/// - Frame Rate: 30 fps recommended
+/// - Audio: AAC codec
+/// - File Size: Max 1GB
+Future<SnapchatValidationResult> validateSnapchatRequirements(String videoPath) async {
+  final videoInfo = await getVideoInfo(videoPath);
+  
+  if (videoInfo == null) {
+    return SnapchatValidationResult(
+      isValid: false,
+      issues: ['Could not read video information'],
+    );
+  }
+
+  final issues = <String>[];
+
+  // Check codec
+  if (videoInfo.codec != 'h264') {
+    issues.add("Codec must be H.264, got: ${videoInfo.codec}");
+  }
+
+  // Check minimum resolution
+  if (videoInfo.width < 720 || videoInfo.height < 1280) {
+    issues.add(
+      "Resolution too low: ${videoInfo.width}x${videoInfo.height}. Min: 720x1280",
+    );
+  }
+
+  // Check aspect ratio (9:16 = 0.5625)
+  // Allow some tolerance for different aspect ratios
+  if (videoInfo.aspectRatio < 0.4 || videoInfo.aspectRatio > 0.7) {
+    issues.add(
+      "Aspect ratio should be close to 9:16 (vertical), got: ${videoInfo.aspectRatio.toStringAsFixed(2)}",
+    );
+  }
+
+  // Check duration
+  if (videoInfo.duration < 3) {
+    issues.add("Duration too short: ${videoInfo.duration.toStringAsFixed(1)}s. Min: 3s");
+  } else if (videoInfo.duration > 180) {
+    issues.add("Duration too long: ${videoInfo.duration.toStringAsFixed(1)}s. Max: 180s");
+  }
+
+  // Check audio codec (if present)
+  if (videoInfo.audioCodec != null && videoInfo.audioCodec != 'aac') {
+    issues.add("Audio codec should be AAC, got: ${videoInfo.audioCodec}");
+  }
+
+  return SnapchatValidationResult(
+    isValid: issues.isEmpty,
+    issues: issues,
+    videoInfo: videoInfo,
+  );
+}
+
+/// Converts video to meet Snapchat Ads requirements
+/// 
+/// Output specs:
+/// - Codec: H.264
+/// - Resolution: 1080x1920 (9:16 aspect ratio)
+/// - Frame Rate: 30 fps
+/// - Audio: AAC 128kbps
+/// - Quality: CRF 23 (good balance between quality and file size)
+Future<String?> formatVideoForSnapchat({
+  required String inputPath,
+  required String outputPath,
+  Function(double)? onProgress,
+  FFmpegConversionController? controller,
+}) async {
+  print("🔄 Formatting video for Snapchat...");
+  print("   Input: $inputPath");
+  print("   Output: $outputPath");
+
+  // Build FFmpeg command for Snapchat specs
+  // - Scale to 1080x1920 maintaining aspect ratio
+  // - Pad with black bars if needed
+  // - H.264 codec with CRF 23
+  // - 30 fps
+  // - AAC audio at 128kbps
+  // - Fast start for web playback
+  final command = '-i "$inputPath" '
+      '-vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black" '
+      '-c:v libx264 '
+      '-preset medium '
+      '-crf 23 '
+      '-r 30 '
+      '-pix_fmt yuv420p '
+      '-c:a aac '
+      '-b:a 128k '
+      '-ar 44100 '
+      '-movflags +faststart '
+      '-y "$outputPath"';
+
+  // Get duration for progress calculation
+  Duration? totalDuration;
+  try {
+    totalDuration = await _getMediaDuration(inputPath);
+  } catch (e) {
+    print("Could not determine media duration: $e");
+  }
+
+  // Use Completer to handle async result
+  final completer = Completer<String?>();
+
+  FFmpegKit.executeAsync(
+    command,
+    (session) async {
+      controller?._session = session;
+      final returnCode = await session.getReturnCode();
+      final success = ReturnCode.isSuccess(returnCode);
+
+      // Final progress update
+      if (onProgress != null) {
+        onProgress(success ? 1.0 : 0.0);
+      }
+
+      if (!success) {
+        final output = await session.getOutput();
+        print("❌ Snapchat formatting failed. Return code: $returnCode");
+        print("Output: $output");
+        completer.complete(null);
+      } else {
+        print("✅ Video formatted for Snapchat successfully");
+        completer.complete(outputPath);
+      }
+    },
+    (log) {
+      // Log callback
+    },
+    (statistics) {
+      // Statistics callback for live progress
+      if (onProgress != null && totalDuration != null) {
+        final totalMs = totalDuration.inMilliseconds.toDouble();
+        final currentMs = statistics.getTime();
+
+        if (currentMs > 0 && totalMs > 0) {
+          final progressValue = (currentMs / totalMs).clamp(0.0, 1.0);
+          onProgress(progressValue);
+        }
+      }
+    },
+  );
+
+  return completer.future;
+}
+
+// Rest of your existing code below...
 
 /// Converts media to: MP4, MOV, MP3, WAV, AAC, FLAC.
 Future<bool> convertMedia({
@@ -54,7 +328,6 @@ Future<bool> convertMedia({
     throw UnsupportedError("Unsupported conversion from this type to $format");
   }
 
-  // Get duration for progress calculation
   Duration? totalDuration;
   try {
     totalDuration = await _getMediaDuration(inputPath);
@@ -62,38 +335,29 @@ Future<bool> convertMedia({
     print("Could not determine media duration: $e");
   }
 
-  // Use Completer to handle async result
   final completer = Completer<bool>();
 
-  // Use executeAsync to get live progress updates via the StatisticsCallback
   FFmpegKit.executeAsync(
     cmd,
-        (session) async {
-      // This is the session complete callback
+    (session) async {
       controller?._session = session;
       final returnCode = await session.getReturnCode();
       final success = ReturnCode.isSuccess(returnCode);
 
-      // Final progress update
       if (onProgress != null) {
         onProgress(success ? 1.0 : 0.0);
       }
 
-      // Log failure reason if not successful
       if (!success) {
         final output = await session.getOutput();
         print("FFmpeg conversion failed. Return code: $returnCode");
         print("Output: $output");
       }
 
-      // Complete the future with the success status
       completer.complete(success);
     },
-        (log) {
-      // Log callback - you can add logging here if needed
-    },
-        (statistics) {
-      // This is the statistics callback for live progress
+    (log) {},
+    (statistics) {
       if (onProgress != null && totalDuration != null) {
         final totalMs = totalDuration.inMilliseconds.toDouble();
         final currentMs = statistics.getTime();
@@ -145,10 +409,8 @@ String _buildVideoToAudioCommand(String input, String output, String quality, St
   final codec = _getAudioCodec(format);
 
   if (codec == 'pcm_s16le') {
-    // WAV doesn't use bitrate
     return '-i "$input" -vn -c:a $codec "$output" -y';
   } else if (codec == 'flac') {
-    // FLAC uses compression level instead of bitrate
     return '-i "$input" -vn -c:a $codec -compression_level 5 "$output" -y';
   } else {
     return '-i "$input" -vn -c:a $codec -b:a $bitrate "$output" -y';
@@ -210,14 +472,13 @@ int _getCRF(String quality) {
 }
 
 /// Clips media from a start time to an end time, then exports it with chosen settings.
-/// The duration is calculated as end - start.
 Future<bool> clipMedia({
   required String inputPath,
   required String outputPath,
   required double startTimeSeconds,
   required double endTimeSeconds,
   required String quality,
-  required String format, // Added format explicitly for output
+  required String format,
   Function(double)? onProgress,
   FFmpegConversionController? controller,
 }) async {
@@ -233,16 +494,13 @@ Future<bool> clipMedia({
     throw UnsupportedError("Unsupported format: $format");
   }
 
-  // Determine if the input file is a video or just audio
   final inputIsVideo = _isVideoFile(inputPath);
 
   late String cmd;
 
-  // The output format should always be the target format (e.g., mp4 or mp3)
   final targetFormat = isVideoFormat ? lowerFormat : lowerFormat;
 
   if (inputIsVideo) {
-    // Video-to-Video or Video-to-Audio Clipping
     cmd = _buildVideoClipCommand(
       inputPath,
       outputPath,
@@ -252,7 +510,6 @@ Future<bool> clipMedia({
       targetFormat,
     );
   } else if (isAudioFormat) {
-    // Audio-to-Audio Clipping
     cmd = _buildAudioClipCommand(
       inputPath,
       outputPath,
@@ -265,32 +522,18 @@ Future<bool> clipMedia({
     throw UnsupportedError("Unsupported conversion from this type to $format");
   }
 
-
-  // --- Logic for execution, duration, and progress calculation remains the same ---
-
-  // Get duration for progress calculation (Note: FFprobe on input for duration is correct)
   Duration? totalDuration;
   try {
-    // NOTE: For progress to be accurate, we should ideally use the *clip duration* // calculated here, not the full file duration.
-    // However, the progress handler in the wrapper uses the full media duration.
-    // We will keep using the full duration check in the existing wrapper
-    // but the actual progress bar should rely on the FFmpeg statistics
-    // *relative to the clip length*.
-
-    // For simplicity with the existing wrapper's progress logic, we use the CLIP duration:
     totalDuration = Duration(milliseconds: (durationSeconds * 1000).round());
   } catch (e) {
     print("Could not determine media duration: $e");
   }
 
-  // Use Completer to handle async result
   final completer = Completer<bool>();
 
-  // Execute Async (using the existing logic from convertMedia)
   FFmpegKit.executeAsync(
     cmd,
-        (session) async {
-      // Session complete callback (same as convertMedia)
+    (session) async {
       controller?._session = session;
       final returnCode = await session.getReturnCode();
       final success = ReturnCode.isSuccess(returnCode);
@@ -307,15 +550,11 @@ Future<bool> clipMedia({
 
       completer.complete(success);
     },
-        (log) {
-      // Log callback
-    },
-        (statistics) {
-      // Statistics callback for live progress
-      // Progress calculation MUST use the clip duration
+    (log) {},
+    (statistics) {
       if (onProgress != null && totalDuration != null) {
         final clipTotalMs = totalDuration.inMilliseconds.toDouble();
-        final currentMs = statistics.getTime(); // time elapsed in the clip process
+        final currentMs = statistics.getTime();
 
         if (currentMs > 0 && clipTotalMs > 0) {
           final progressValue = (currentMs / clipTotalMs).clamp(0.0, 1.0);
@@ -328,27 +567,18 @@ Future<bool> clipMedia({
   return completer.future;
 }
 
-// --- NEW HELPER COMMANDS ---
-
-// The key to effective trimming:
-// - '-ss' (seek) BEFORE '-i' is faster but less accurate.
-// - '-ss' AFTER '-i' is slower but frame-accurate (used here).
-// - '-t' is the duration (end-start).
-
 String _buildVideoClipCommand(
-    String input,
-    String output,
-    double start,
-    double duration,
-    String quality,
-    String format,
-    ) {
+  String input,
+  String output,
+  double start,
+  double duration,
+  String quality,
+  String format,
+) {
   final crf = _getCRF(quality);
-  // '-ss' after input for accurate seek; '-t' for duration
   if (format == 'mp4' || format == 'mov') {
     return '-i "$input" -ss $start -t $duration -c:v libx264 -crf $crf -preset ultrafast -c:a aac "$output" -y';
   } else {
-    // If clipping video to audio (e.g., MP3)
     final bitrate = _getAudioBitrate(quality);
     final codec = _getAudioCodec(format);
     return '-i "$input" -ss $start -t $duration -vn -c:a $codec -b:a $bitrate "$output" -y';
@@ -356,25 +586,21 @@ String _buildVideoClipCommand(
 }
 
 String _buildAudioClipCommand(
-    String input,
-    String output,
-    double start,
-    double duration,
-    String quality,
-    String format,
-    ) {
+  String input,
+  String output,
+  double start,
+  double duration,
+  String quality,
+  String format,
+) {
   final bitrate = _getAudioBitrate(quality);
   final codec = _getAudioCodec(format);
 
-  // '-ss' after input for accurate seek; '-t' for duration
   if (codec == 'pcm_s16le') {
-    // WAV
     return '-i "$input" -ss $start -t $duration -c:a $codec "$output" -y';
   } else if (codec == 'flac') {
-    // FLAC
     return '-i "$input" -ss $start -t $duration -c:a $codec -compression_level 5 "$output" -y';
   } else {
-    // MP3/AAC
     return '-i "$input" -ss $start -t $duration -c:a $codec -b:a $bitrate "$output" -y';
   }
 }
