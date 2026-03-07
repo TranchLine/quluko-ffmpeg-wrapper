@@ -1,6 +1,6 @@
-# PostClip FFmpeg Wrapper
+# Quluko FFmpeg Wrapper
 
-A Dart package wrapping FFmpegKit for media conversion in the PostClip app.
+A Dart package wrapping FFmpegKit for media conversion in the Quluko app.
 
 ## Usage
 ```dart
