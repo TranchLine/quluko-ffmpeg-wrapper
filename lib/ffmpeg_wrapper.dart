@@ -604,3 +604,56 @@ String _buildAudioClipCommand(
     return '-i "$input" -ss $start -t $duration -c:a $codec -b:a $bitrate "$output" -y';
   }
 }
+
+/// Mixes multiple audio tracks in real-time for preview
+/// Returns a path to a temporary mixed audio file
+Future<String?> mixAudioForPreview({
+  required List<Map<String, dynamic>> audioClips,
+  required double totalDuration,
+  required String tempOutputPath,
+}) async {
+  if (audioClips.isEmpty) return null;
+  
+  // Filter out muted clips
+  final activeClips = audioClips.where((c) => c['isMuted'] != true).toList();
+  if (activeClips.isEmpty) return null;
+  
+  // Build filter_complex for real-time mixing
+  final inputParts = <String>[];
+  final filterParts = <String>[];
+  
+  for (int i = 0; i < activeClips.length; i++) {
+    final clip = activeClips[i];
+    inputParts.add('-i "${clip['path']}"');
+    
+    final startTime = (clip['startTime'] as num).toDouble();
+    final trimStart = (clip['trimStart'] as num).toDouble();
+    final duration = (clip['duration'] as num).toDouble();
+    final volume = (clip['volume'] as num).toDouble();
+    final delayMs = (startTime * 1000).toInt();
+    
+    filterParts.add(
+      '[${i}:a]atrim=start=$trimStart:duration=$duration,'
+      'volume=$volume,'
+      'adelay=${delayMs}|${delayMs},'
+      'apad=whole_dur=${totalDuration}[a$i]'
+    );
+  }
+  
+  final mixInputs = List.generate(activeClips.length, (i) => '[a$i]').join('');
+  final amixFilter = '${mixInputs}amix=inputs=${activeClips.length}:duration=longest:dropout_transition=0[out]';
+  
+  final command = '${inputParts.join(' ')} '
+      '-filter_complex "${filterParts.join('; ')}; $amixFilter" '
+      '-map "[out]" '
+      '-c:a aac -b:a 192k -ar 48000 '
+      '-y "$tempOutputPath"';
+  
+  final session = await FFmpegKit.execute(command);
+  final returnCode = await session.getReturnCode();
+  
+  if (ReturnCode.isSuccess(returnCode)) {
+    return tempOutputPath;
+  }
+  return null;
+}
