@@ -1,8 +1,8 @@
 name: quluko_ffmpeg_wrapper
-description: A wrapper around FfmpegKit for Quluko app. (still have to use the open source version of the ffmpeg kit)
-version: 2.0.2
+description: A wrapper around FfmpegKit for Quluko app. (using LGPL licensed FFmpeg)
+version: 2.0.3
 environment:
-  sdk: ">=2.17.0 <3.0.0"
+  sdk: ">=3.0.0 <4.0.0"
 
 dependencies:
-  ffmpeg_kit_flutter_new: 3.2.0   # This will be changed to use the open source version.
+  ffmpeg_kit_flutter_new: ^4.5.1  # Latest stable, LGPL by default
