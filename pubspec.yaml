@@ -1,6 +1,6 @@
 name: quluko_ffmpeg_wrapper
 description: A wrapper around FfmpegKit for Quluko app. (still have to use the open source version of the ffmpeg kit)
-version: 2.0.1
+version: 2.0.2
 environment:
   sdk: ">=2.17.0 <3.0.0"
 
