@@ -683,3 +683,29 @@ Future<String?> extractVideoFrame({
     return null;
   }
 }
+
+/// Creates a temporary preview clip starting from a given position
+Future<String?> createPreviewClip({
+  required String videoPath,
+  required double startTime,
+  required String outputPath,
+  int duration = 5, // 5 second preview
+}) async {
+  final command = '-ss $startTime -i "$videoPath" '
+      '-t $duration '
+      '-c:v libx264 -preset ultrafast -crf 28 '
+      '-c:a aac -b:a 128k '
+      '-y "$outputPath"';
+  
+  try {
+    final session = await FFmpegKit.execute(command);
+    final returnCode = await session.getReturnCode();
+    if (ReturnCode.isSuccess(returnCode)) {
+      return outputPath;
+    }
+  } catch (e) {
+    print('Preview clip error: $e');
+  }
+  return null;
+}
+
