@@ -658,13 +658,13 @@ Future<String?> mixAudioForPreview({
   return null;
 }
 
-/// Extracts a single frame from a video at a specific timestamp
-/// Returns the path to the extracted image file
+// extract the Video Frapme from the playback
+
 Future<String?> extractVideoFrame({
   required String videoPath,
   required double timeSeconds,
   required String outputPath,
-  int width = 480, // Thumbnail width (keeps aspect ratio)
+  int width = 480,
 }) async {
   final command = '-ss $timeSeconds -i "$videoPath" '
       '-vframes 1 '
@@ -672,11 +672,16 @@ Future<String?> extractVideoFrame({
       '-q:v 2 '
       '-y "$outputPath"';
   
-  final session = await FFmpegKit.execute(command);
-  final returnCode = await session.getReturnCode();
-  
-  if (ReturnCode.isSuccess(returnCode)) {
-    return outputPath;
+  try {
+    final session = await FFmpegKit.execute(command);
+    final returnCode = await session.getReturnCode();
+    
+    if (ReturnCode.isSuccess(returnCode)) {
+      return outputPath;
+    }
+    return null;
+  } catch (e) {
+    debugPrint('extractVideoFrame error: $e');
+    return null;
   }
-  return null;
 }
