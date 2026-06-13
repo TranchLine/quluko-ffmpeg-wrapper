@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_session.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:ffmpeg_kit_flutter_new/ffprobe_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/statistics.dart';
+
 
 /// A controller to manage FFmpeg conversion
 class FFmpegConversionController {
@@ -677,7 +679,7 @@ Future<String?> extractVideoFrame({
     }
     return null;
   } catch (e) {
-    debugPrint('extractVideoFrame error: $e');
+    print('extractVideoFrame error: $e');
     return null;
   }
 }
