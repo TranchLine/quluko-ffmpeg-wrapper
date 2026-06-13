@@ -668,7 +668,7 @@ Future<String?> extractVideoFrame({
   required String outputPath,
   int width = 480,
 }) async {
-  final command = '-i "$videoPath" -ss $timeSeconds -vframes 1 -vf "scale=$width:-1" -q:v 2 -y "$outputPath"';
+  final command = '-ss $timeSeconds -i "$videoPath" -vframes 1 -vf "scale=$width:-1" -q:v 2 -y "$outputPath"';
   
   try {
     final session = await FFmpegKit.execute(command);
