@@ -684,18 +684,20 @@ Future<String?> extractVideoFrame({
   }
 }
 
-/// Creates a temporary preview clip starting from a given position
+/// Creates an accurate temporary preview clip matching exact timestamps
 Future<String?> createPreviewClip({
   required String videoPath,
   required double startTime,
   required String outputPath,
-  int duration = 5, // 5 second preview
+  int duration = 5,
 }) async {
-  final command = '-ss $startTime -i "$videoPath" '
+  // CRITICAL: Put -ss AFTER -i for exact frame accurate clipping bounds
+  final command = '-i "$videoPath" '
+      '-ss $startTime '
       '-t $duration '
       '-c:v libx264 -preset ultrafast -crf 28 '
       '-c:a aac -b:a 128k '
-     '-movflags +faststart '
+      '-movflags +faststart '
       '-y "$outputPath"';
   
   try {
@@ -705,8 +707,7 @@ Future<String?> createPreviewClip({
       return outputPath;
     }
   } catch (e) {
-    print('Preview clip error: $e');
+    print('Preview clip parsing error: $e');
   }
   return null;
 }
-
