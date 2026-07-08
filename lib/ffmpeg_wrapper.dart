@@ -711,3 +711,29 @@ Future<String?> createPreviewClip({
   }
   return null;
 }
+
+
+/// Combines a video file with a separate audio file
+Future<String?> combineVideoWithAudio({
+  required String videoPath,
+  required String audioPath,
+  required String outputPath,
+}) async {
+  final command = '-i "$videoPath" -i "$audioPath" '
+      '-map 0:v -map 1:a '
+      '-c:v copy -c:a aac -b:a 192k '
+      '-shortest -movflags +faststart '
+      '-y "$outputPath"';
+  
+  try {
+    final session = await FFmpegKit.execute(command);
+    final returnCode = await session.getReturnCode();
+    if (ReturnCode.isSuccess(returnCode)) {
+      return outputPath;
+    }
+  } catch (e) {
+    print('combineVideoWithAudio error: $e');
+  }
+  return null;
+}
+
